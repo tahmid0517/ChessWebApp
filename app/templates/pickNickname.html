@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html>
+	<head>
+		<title>Ultimate RPS</title>
+		<link rel="stylesheet" type="text/css" href="{{url_for('static', filename='css/menuButton.css')}}">
+	</head>
+	<body>
+		<form id="setNicknameForm" action="/setNickname" method="post">
+			<p style="text-align:center">
+				<label for="nickname" style="font-family:Cursive">Enter a nickname:</label>
+				<input type="text" id="nickname" name="nickname">
+			</p>
+			<input type="hidden" id="redirectURL" name="redirectURL" value="{{redirectURL}}">
+			<p style="text-align:center"><button>SET NICKNAME</button></p>
+		</form>				
+		{% if showBlankNicknameMessage %}	
+			<p style="text-align:center;font-family:Cursive">You can't have a blank nickname!</p>
+		{% endif %}
+		{% if showInappropNicknameMessage %}	
+			<p style="text-align:center;font-family:Cursive">Your nickname isn't appropriate. Please keep it classy.</p>
+		{% endif %}
+		{% if showExistingNicknameMessage %}	
+			<p style="text-align:center;font-family:Cursive">That nickname is already taken. Choose another.</p>
+		{% endif %}
+	</body>
+</html>
+

@@ -345,3 +345,6 @@ BAD_WORDS = [
 
 DATABASE_NAME = 'data.db'
 
+SUPPORTED_TIME_LIMITS = {5, 15, 30, 45}
+
+BASE_URL = 'http://127.0.0.1:5000'

@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html>
+	<head>
+		<title>Chess Online</title>
+		<link rel="stylesheet" type="text/css" href="{{url_for('static', filename='css/menuButton.css')}}">
+		<script>
+			function copyLink() {
+				const textToCopy = "{{link}}";
+				const tempElement = document.createElement('textarea');
+				tempElement.value = textToCopy;
+				document.body.appendChild(tempElement);
+				tempElement.select();
+				document.execCommand("copy");
+				document.body.removeChild(tempElement);
+			}
+
+			function checkGameStatus() {
+				let xmlHttp = new XMLHttpRequest();
+				xmlHttp.onreadystatechange = function() {
+					if(xmlHttp.readyState == 4 && xmlHttp.status == 200) {
+						const responseObj = JSON.parse(xmlHttp.responseText);
+						if(responseObj.error != null) {
+							window.clearInterval();
+							window.location.href = "/home";
+						} else if(responseObj.gameStatus != "WAITING_FOR_OPPONENT") {
+							window.clearInterval();
+							if(responseObj.gameStatus == null || responseObj.gameStatus == "CANCELLED") {
+								return;
+							}
+							window.location.href = "/home";
+						} 
+					}	
+				}
+				xmlHttp.open("POST", "/getGameStatus", true);
+				xmlHttp.send(null);
+			}
+
+			function cancelGame() {
+				let xmlHttp = new XMLHttpRequest();
+				xmlHttp.open("POST", "/cancelPVPGame", true);
+				xmlHttp.onreadystatechange = function() {
+					if(xmlHttp.readyState == 4 && xmlHttp.status == 200) {
+						const responseObj = JSON.parse(xmlHttp.responseText);
+						if(responseObj.SUCCESS != null) {
+							window.clearInterval();
+							alert("Your game has been cancelled.");
+							window.location.href = "/home";
+						} 
+					}
+				}
+				xmlHttp.send(null);
+			}
+
+			window.setInterval(checkGameStatus, 1500);
+		</script>
+	</head>
+	<body>
+		<p style="text-align:center;font-family:Cursive">Waiting for opponent to join...</p>
+		<p style="text-align:center;font-family:Cursive">Send your opponent the following link:</p>
+		<p style="text-align:center;font-family:Cursive" id="joinGameLink">{{link}}</p>
+		<p style="text-align:center"><button onclick="copyLink()">COPY LINK</button></p>
+		{% if passwordReq %}
+			<p style="text-align:center;font-family:Cursive">They must then enter the password: {{password}}</p>
+		{% endif %} 
+		<p style="text-align:center"><button onclick="cancelGame()">CANCEL GAME</button></p>
+	</body>
+</html>
+
+

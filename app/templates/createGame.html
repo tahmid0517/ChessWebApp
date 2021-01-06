@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html>
+	<head>
+		<title>Chess Online</title>
+		<link rel="stylesheet" type="text/css" href="{{url_for('static', filename='css/menuButton.css')}}">
+		<script>
+			function togglePasswordField() {
+				let passwordField = document.getElementById("passwordField")
+				let checkbox = document.getElementById("usePasswordCheckbox")
+				if(checkbox.checked) {
+					passwordField.style.display = "block";
+				} else {
+					passwordField.style.display = "none";
+				}
+			}
+		</script>
+	</head>
+	<body>
+		<form action="/submitGameSettings" method="post">
+			<p style="text-align:center">
+				<label for="playAsSelector" style="font-family:Cursive">I play as:</label>
+				<select id="playAsSelector" name="hostPlaysAs">
+  					<option value=0>Random</option>
+  					<option value=1>White</option>
+  					<option value=2>Black</option>
+				</select>
+			</p>
+			<p style="text-align:center">
+				<label for="timeLimitSelector" style="font-family:Cursive">Time Limit (per player):</label>
+				<select id="timeLimitSelector" name="timeLimit">
+  					<option value=5>5 minutes</option>
+  					<option value=15>15 minutes</option>
+  					<option value=30 selected>30 minutes</option>
+  					<option value=45>45 minutes</option>
+				</select>
+			</p>
+			
+			{% if gameVsHuman %}
+				<p style="text-align:center">
+					<label for="usePasswordCheckbox" style="font-family:Cursive">Set password?:</label>
+					<input id="usePasswordCheckbox" type="checkbox" onclick="togglePasswordField()">
+				</p>	
+				<div id="passwordField" style="text-align:center;display:none">
+					<label for="gamePassword" style="font-family:Cursive">
+						Password (opponent must enter to play):
+					</label>
+					<input id="gamePassword" type="text" name="gamePassword">
+				</div>
+			{% endif %}
+			<input type="hidden" name="gameVsHuman" value="{{gameVsHuman}}">
+			<p style="text-align:center"><button>CREATE GAME</button></p>
+		</form>				
+		<p style="text-align:center" onclick="location.href='/home'"><button>BACK TO MAIN MENU</button></p>
+		{% if showErrorMessage %}	
+			<p style="text-align:center;font-family:Cursive">An error occurred. Please try again.</p>
+		{% endif %}
+		{% if showPasswordErrorMessage %}	
+			<p style="text-align:center;font-family:Cursive">Password must only contain alphanumeric characters.</p>
+		{% endif %}
+	</body>
+</html>
+
+

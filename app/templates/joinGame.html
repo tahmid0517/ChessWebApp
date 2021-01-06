@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html>
+    <head>
+	<title>Chess Online</title>
+	<link rel="stylesheet" type="text/css" href="{{url_for('static', filename='css/menuButton.css')}}">
+    </head>
+    <body>
+	{% if showUnsuccessfulMessage %}
+		<p style="text-align:center;font-family:Cursive">
+			The Game ID and/or password appear to be incorrect or invalid. The Game ID may also be unavailable now.
+		</p>	
+	{% endif %}
+	<form action="/submitPVPGameCredentials" method="post">
+		<p style="text-align:center">
+			<label for="gameID" style="font-family:Cursive">Game ID:</label>
+			<input id="gameID" type="text" name="gameID" value="{{prefilledID}}">
+		</p>
+		<p style="text-align:center">
+			<label for="password" style="font-family:Cursive">Password:</label>
+			<input id="password" type="text" name="password">
+		</p>
+        	<p style="text-align:center"><button>JOIN GAME</button></p>
+	</form>
+        <p style="text-align:center"><button onclick="location.href='/home'">BACK TO MAIN MENU</button></p>
+    </body>
+</html>
+

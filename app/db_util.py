@@ -1,6 +1,4 @@
 import time
-import logging
-import sys
 
 from log_wrapper import Logger
 
@@ -8,25 +6,34 @@ MODULE_NAME = 'db_util'
 USERS_TABLE_NAME = 'users'
 GAMES_TABLE_NAME = 'games'
 
-class GamesTableColumns:
-    INTERNAL_GAME_ID = "internal_game_id"
-    EXTERNAL_GAME_ID = "external_game_id"
-    IS_PLAYER_VS_PLAYER = "is_pvp"
-    HOST_USER_ID = "host_user_id"
-    GUEST_USER_ID = "guest_user_id"
-    IS_HOST_PLAYING_WHITE = "is_host_white"
-    GAME_STATUS = "game_status"
-    GAME_RESULT = "game_result"
-    PASSWORD = "PASSWORD"
-    MOVES_PLAYED = "moves_played"
+class _GamesTableColumns:
+    INTERNAL_GAME_ID = 'internal_game_id'
+    EXTERNAL_GAME_ID = 'external_game_id'
+    IS_PLAYER_VS_PLAYER = 'is_pvp'
+    HOST_USER_ID = 'host_user_id'
+    GUEST_USER_ID = 'guest_user_id'
+    IS_HOST_PLAYING_WHITE = 'is_host_white'
+    GAME_STATUS = 'game_status'
+    GAME_END_METHOD = 'game_result'
+    DID_HOST_WIN = 'did_host_win'
+    DID_GAME_DRAW = 'did_game_draw'
+    PASSWORD = 'password'
+    MOVES_PLAYED = 'moves_played'
+
+class GameStatus:
+    WAITING_FOR_OPPONENT = 0
+    ACTIVE = 1
+    COMPLETED = 2
+    CANCELLED = 3
+
+class GameEndMethod:
+    AUTO_RESIGN = 0
+    RESIGN = 1
+    CHECKMATE = 2
+    DRAW_INSUFFICIENT = 3
+    DRAW_STALEMATE = 4
 
 class DBUtil:
-    class GameStatus:
-        WAITING_FOR_OPPONENT = 0
-        ACTIVE = 1
-        COMPLETED = 2
-        CANCELLED = 3
-
     def __init__(self, connection):
         self.conn = connection
         self.logger = Logger(MODULE_NAME)
@@ -48,15 +55,18 @@ class DBUtil:
     def init_games_table(self):
         self.logger.debug("Creating " + GAMES_TABLE_NAME + " table if it doesn't exist")
         table_columns = list()
-        table_columns.append(GamesTableColumns.INTERNAL_GAME_ID + " INTEGER PRIMARY KEY AUTOINCREMENT")
-        table_columns.append(GamesTableColumns.EXTERNAL_GAME_ID + " TEXT UNIQUE NOT NULL")
-        table_columns.append(GamesTableColumns.IS_PLAYER_VS_PLAYER + " INTEGER NOT NULL")
-        table_columns.append(GamesTableColumns.HOST_USER_ID + " INTEGER NOT NULL")
-        table_columns.append(GamesTableColumns.GUEST_USER_ID + " INTEGER")
-        table_columns.append(GamesTableColumns.IS_HOST_PLAYING_WHITE + " INTEGER NOT NULL")
-        table_columns.append(GamesTableColumns.GAME_STATUS + " INTEGER NOT NULL")
-        table_columns.append(GamesTableColumns.PASSWORD + " TEXT NOT NULL")
-        table_columns.append(GamesTableColumns.MOVES_PLAYED + " TEXT NOT NULL")
+        table_columns.append(_GamesTableColumns.INTERNAL_GAME_ID + " INTEGER PRIMARY KEY AUTOINCREMENT")
+        table_columns.append(_GamesTableColumns.EXTERNAL_GAME_ID + " TEXT UNIQUE NOT NULL")
+        table_columns.append(_GamesTableColumns.IS_PLAYER_VS_PLAYER + " INTEGER NOT NULL")
+        table_columns.append(_GamesTableColumns.HOST_USER_ID + " INTEGER NOT NULL")
+        table_columns.append(_GamesTableColumns.GUEST_USER_ID + " INTEGER")
+        table_columns.append(_GamesTableColumns.IS_HOST_PLAYING_WHITE + " INTEGER NOT NULL")
+        table_columns.append(_GamesTableColumns.GAME_STATUS + " INTEGER NOT NULL")
+        table_columns.append(_GamesTableColumns.GAME_END_METHOD + " INTEGER")
+        table_columns.append(_GamesTableColumns.DID_HOST_WIN + " INTEGER")
+        table_columns.append(_GamesTableColumns.DID_GAME_DRAW + " INTEGER")
+        table_columns.append(_GamesTableColumns.PASSWORD + " TEXT NOT NULL")
+        table_columns.append(_GamesTableColumns.MOVES_PLAYED + " TEXT NOT NULL")
         table_columns_joined = '(' + ', '.join(table_columns) + ')'
         self.execute_script("CREATE TABLE IF NOT EXISTS " + GAMES_TABLE_NAME + ' ' + table_columns_joined + ';')
         self.commit_changes()
@@ -152,7 +162,10 @@ class DBUtil:
         values_to_insert.append(str(host_user_id)) # HOST_USER_ID
         values_to_insert.append('NULL') # GUEST_USER_ID
         values_to_insert.append('1' if host_playing_white else '0') # IS_HOST_PLAYING_WHITE
-        values_to_insert.append(str(DBUtil.GameStatus.WAITING_FOR_OPPONENT)) # GAME_STATUS
+        values_to_insert.append(str(GameStatus.WAITING_FOR_OPPONENT)) # GAME_STATUS
+        values_to_insert.append('NULL') # GAME_END_METHOD
+        values_to_insert.append('NULL') # DID_HOST_WIN
+        values_to_insert.append('NULL') # DID_GAME_DRAW
         values_to_insert.append("'" + password + "'") # PASSWORD
         values_to_insert.append("''") # MOVES_PLAYED
         values_to_insert_appended = ' VALUES(' + ', '.join(values_to_insert) + ')'
@@ -161,7 +174,7 @@ class DBUtil:
         return external_id
 
     def get_game_data(self, external_game_id: str, attr: str):
-        condition = " WHERE " + GamesTableColumns.EXTERNAL_GAME_ID + "='" + external_game_id + "'"
+        condition = " WHERE " + _GamesTableColumns.EXTERNAL_GAME_ID + "='" + external_game_id + "'"
         cursor = self.execute_script("SELECT " + attr + " FROM " + GAMES_TABLE_NAME + condition + ';')
         data = cursor.fetchone()
         if data is None:
@@ -169,21 +182,60 @@ class DBUtil:
         return data[0]
 
     def get_pvp_game_pass(self, external_game_id: str):
-        return self.get_game_data(external_game_id, GamesTableColumns.PASSWORD)        
+        return self.get_game_data(external_game_id, _GamesTableColumns.PASSWORD)        
 
     def get_game_status(self, external_game_id: str):
-        return self.get_game_data(external_game_id, GamesTableColumns.GAME_STATUS)        
+        return self.get_game_data(external_game_id, _GamesTableColumns.GAME_STATUS)        
 
     def update_game_status(self, external_game_id: str, new_status: int):
-        set_statement = " SET " + GamesTableColumns.GAME_STATUS + '=' + str(new_status) 
-        condition = " WHERE " + GamesTableColumns.EXTERNAL_GAME_ID + "='" + external_game_id + "'"
+        set_statement = " SET " + _GamesTableColumns.GAME_STATUS + '=' + str(new_status) 
+        condition = " WHERE " + _GamesTableColumns.EXTERNAL_GAME_ID + "='" + external_game_id + "'"
         script = "UPDATE " + GAMES_TABLE_NAME + set_statement + condition + ';'
         self.execute_script(script)
         self.commit_changes()
 
     def cancel_pvp_game(self, external_game_id: str):
-        self.update_game_status(external_game_id, DBUtil.GameStatus.CANCELLED)
+        self.update_game_status(external_game_id, GameStatus.CANCELLED)
 
-    def set_pvp_game_active(self, external_game_id: str):
-        self.update_game_status(external_game_id, DBUtil.GameStatus.ACTIVE)
-        
+    def set_pvp_game_active(self, external_game_id: str, guest_user_id: int):
+        self.logger.debug("Setting PVP game active: " + external_game_id)
+        vals_to_update = list()
+        vals_to_update.append(_GamesTableColumns.GAME_STATUS + ' = ' + str(GameStatus.ACTIVE))
+        vals_to_update.append(_GamesTableColumns.GUEST_USER_ID + ' = ' + str(guest_user_id))
+        set_statement = " SET " + ', '.join(vals_to_update)
+        condition = " WHERE " + _GamesTableColumns.EXTERNAL_GAME_ID + " = '" + external_game_id + "'"
+        script = "UPDATE " + GAMES_TABLE_NAME + set_statement + condition + ';'
+        self.execute_script(script)
+        self.commit_changes()
+        # returns whether or not the guest is playing white
+        is_host_playing_white = self.get_game_data(external_game_id, _GamesTableColumns.IS_HOST_PLAYING_WHITE)
+        if is_host_playing_white == 0:
+            return True
+        else:
+            return False
+       
+    def end_game(self, external_game_id: str, game_end_method: int, did_host_win: bool, did_game_draw: bool, moves_played: str):
+        vals_to_update = list()
+        vals_to_update.append(_GamesTableColumns.GAME_STATUS + '=' + str(GameStatus.COMPLETED))
+        vals_to_update.append(_GamesTableColumns.GAME_END_METHOD + '=' + str(game_end_method))
+        did_host_win_bool = '1' if did_host_win else '0'
+        vals_to_update.append(_GamesTableColumns.DID_HOST_WIN + '=' + did_host_win_bool)
+        did_game_draw_bool = '1' if did_game_draw else '0'
+        vals_to_update.append(_GamesTableColumns.DID_GAME_DRAW + '=' + did_game_draw_bool)
+        vals_to_update.append(_GamesTableColumns.MOVES_PLAYED + "='" + moves_played + "'")
+        set_statement = " SET " + ', '.join(vals_to_update)
+        condition = " WHERE " + _GamesTableColumns.EXTERNAL_GAME_ID + "='" + external_game_id + "'"
+        script = "UPDATE " + GAMES_TABLE_NAME + set_statement + condition + ';'
+        self.execute_script(script)
+        self.commit_changes()
+
+    def get_opponent_nickname(self, external_game_id: str, is_host: bool):
+        opponent_user_id = 0
+        if is_host:
+            opponent_user_id = self.get_game_data(external_game_id, _GamesTableColumns.GUEST_USER_ID)
+        else:
+            opponent_user_id = self.get_game_data(external_game_id, _GamesTableColumns.HOST_USER_ID)
+        cursor = self.execute_script("SELECT nickname FROM " + USERS_TABLE_NAME + " WHERE id=" + str(opponent_user_id) + ';')
+        data = cursor.fetchone()
+        return data[0]
+            

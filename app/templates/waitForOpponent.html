@@ -5,7 +5,7 @@
 		<link rel="stylesheet" type="text/css" href="{{url_for('static', filename='css/menuButton.css')}}">
 		<script>
 			function copyLink() {
-				const textToCopy = "{{link}}";
+				const textToCopy = window.location.origin + "{{link}}";
 				const tempElement = document.createElement('textarea');
 				tempElement.value = textToCopy;
 				document.body.appendChild(tempElement);
@@ -57,11 +57,21 @@
 	<body>
 		<p style="text-align:center;font-family:Cursive">Waiting for opponent to join...</p>
 		<p style="text-align:center;font-family:Cursive">Send your opponent the following link:</p>
-		<p style="text-align:center;font-family:Cursive" id="joinGameLink">{{link}}</p>
+		<p style="text-align:center;font-family:Cursive" id="joinGameLink">[replace_with_base_url]{{link}}</p>
+		<script>
+			originalString = document.getElementById("joinGameLink").innerHTML;
+			newString = originalString.replace("[replace_with_base_url]", window.location.origin);
+			document.getElementById("joinGameLink").innerHTML = newString;
+		</script>
 		<p style="text-align:center"><button onclick="copyLink()">COPY LINK</button></p>
 		{% if passwordReq %}
 			<p style="text-align:center;font-family:Cursive">They must then enter the password: {{password}}</p>
 		{% endif %} 
+		{# not supporting time limits  for now
+		<p style="text-align:center;font-family:Cursive">
+			As soon as the opponent joins the game, the timer will start for whoever plays white.
+		</p>
+		#}
 		<p style="text-align:center"><button onclick="cancelGame()">CANCEL GAME</button></p>
 	</body>
 </html>

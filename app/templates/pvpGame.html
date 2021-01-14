@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html>
+    <head>
+	<title>Chess Online</title>
+	<link rel="stylesheet" type="text/css" href="{{url_for('static', filename='css/menuButton.css')}}">
+    </head>
+    <body>
+	<p style="text-align:center;font-family:Cursive">You vs. {{opponentNickname}}</p>
+	<script>
+		var errorCount = 0;
+		function handlePostRequestError() {
+			errorCount++;
+			if(errorCount >= 7) {
+				alert("Something went wrong. Redirecting to home page.");
+				//window.location.href = "/home";
+			}
+		}
+
+		let isOpponentOnline = true;
+		let finalCheckIn = false;
+		let isPlayersTurn = false;
+		let pageFirstLoaded = true;
+		function checkIntoGame() {
+			let xmlHttp = new XMLHttpRequest();
+			xmlHttp.onreadystatechange = function() {
+				if(xmlHttp.readyState == 4 && xmlHttp.status == 200) {
+					if(finalCheckIn) return;
+					const responseObj = JSON.parse(xmlHttp.responseText);
+					if(responseObj.opponentStatus != null && responseObj.gameStatus != null) {
+						if(responseObj.gameStatus != 'ACTIVE') {
+							//if(finalCheckIn) return;
+							window.clearInterval();
+							let beginningOfMsg = "You ";
+							if(responseObj.gameStatus == "DRAW") {
+								beginningOfMsg = "The game ended in a ";
+							}
+							message = "You " + responseObj.gameStatus + " by " + responseObj.reasonForGameEnding;
+							getCurrentBoardSVG();
+							alert(message);
+							document.getElementById("gameInfoMsg").innerHTML = message;
+							document.getElementById("resignBtn").style.display = "none";
+							document.getElementById("backToMainMenuBtn").style.display = "block";
+							finalCheckIn = true;
+							return;
+						} else if(responseObj.opponentStatus == "OFFLINE" && isOpponentOnline) {
+							alert("Your opponent is offline. They will auto-resign in a few minutes if they do not come back.");
+							isOpponentOnline = false;
+						} else if(!isOpponentOnline && responseObj.opponentStatus == "ONLINE") {
+							alert("Your opponent is back online.");
+							isOpponentOnline = true;
+						}
+						if(responseObj.isPlayersTurn && !isPlayersTurn) {
+							isPlayersTurn = true;
+							document.getElementById("gameInfoMsg").innerHTML = "Your move";
+							getCurrentBoardSVG();
+						} else if(!responseObj.isPlayersTurn && (pageFirstLoaded || isPlayersTurn)) {
+							isPlayersTurn = false;
+							pageFirstLoaded = false;
+							document.getElementById("gameInfoMsg").innerHTML = "Waiting for opponent's move...";
+						}
+					} else {
+						handlePostRequestError();
+					}
+				} 
+			}
+			xmlHttp.open("POST", "/checkInPVPGame", true);
+			xmlHttp.send(null);
+		}
+		checkIntoGame();
+		window.setInterval(checkIntoGame, 1500);
+
+		function submitResignation() {
+			const resignationConfirmed = confirm("Are you sure you want to resign the game?");
+			if(resignationConfirmed) {
+				let xmlHttp = new XMLHttpRequest();
+				xmlHttp.open("POST", "/submitPVPResignation", true);
+				xmlHttp.send(null);
+			}
+		} 
+
+		function surroundSquareWithATag(squareToSurround, onClickSquareFunc) {
+			let rectEl = document.getElementsByClassName(squareToSurround).item(0);
+			rectEl.addEventListener("click", onClickSquareFunc);
+			if(rectEl.nextSibling != null && rectEl.nextSibling.tagName == "use") {
+				rectEl.nextSibling.addEventListener("click", onClickSquareFunc);
+				xEl = rectEl.nextSibling.nextSibling;
+				if(xEl != null && xEl.tagName == "use") {
+					xEl.addEventListener("click", onClickSquareFunc);
+				}
+			}
+		}
+
+		function setUpPiecesToAttackFrom(piecePositions) {
+			numOfPieces = piecePositions.length;
+			for(let i = 0; i < numOfPieces; i++) {
+				let squareName = piecePositions[i];
+				let onClick = function() {getAttackFromSquareSVG(squareName);}
+				surroundSquareWithATag(squareName, onClick);
+			}
+		}
+
+		function getCurrentBoardSVG() {
+			let xmlHttp = new XMLHttpRequest();
+			let failedRequests = 0;
+			xmlHttp.onreadystatechange = function() {
+				if(xmlHttp.readyState == 4 && xmlHttp.status == 200) {
+					const responseObj = JSON.parse(xmlHttp.responseText);
+					if(responseObj.boardSVG != null) {
+						const board = document.getElementById("board");
+						board.innerHTML = responseObj.boardSVG;
+						if(responseObj.isPlayersTurn) {
+							setUpPiecesToAttackFrom(responseObj.piecePositions);
+						}
+					}
+					initialBoardLoaded = true;
+				}
+			}
+			xmlHttp.open("POST", "/getPVPBoardSVG");
+			xmlHttp.send(null);
+		}
+
+		let initialBoardLoaded = false;
+		function loadInitialBoard() {
+			if(!initialBoardLoaded) {
+				getCurrentBoardSVG();
+				initialBoardLoaded = true;
+			} else {
+				window.clearInterval(loadInitialTimerID);
+			}
+		}		
+		const loadInitialTimerID = window.setInterval(loadInitialBoard, 500)
+
+		function submitMove(fromSquare, toSquare) {
+			let xmlHttp = new XMLHttpRequest();
+			xmlHttp.onreadystatechange = function() {
+				if(xmlHttp.readyState == 4 && xmlHttp.status == 200) {
+					const responseObj = JSON.parse(xmlHttp.responseText);
+					if(responseObj.isMoveLegal) {
+						getCurrentBoardSVG();		
+					}
+				}
+			}		
+			xmlHttp.open("POST", "/submitMove");
+			let formData = new FormData();
+			formData.append("fromSquare", fromSquare);
+			formData.append("toSquare", toSquare);
+			xmlHttp.send(formData);
+		}
+
+		function setUpPositionsToAttackTo(movingFromSquare, positions) {
+			numOfSquares = positions.length;
+			for(let i = 0; i < numOfSquares; i++) {
+				let movingToSquare = positions[i];
+				let onClick = function() {submitMove(movingFromSquare, movingToSquare);}
+				surroundSquareWithATag(movingToSquare, onClick);
+			}	
+		}		
+
+		function getAttackFromSquareSVG(squareToAttackFrom) {
+			let xmlHttp = new XMLHttpRequest();
+			xmlHttp.onreadystatechange = function() {
+				if(xmlHttp.readyState == 4 && xmlHttp.status == 200) {
+					const responseObj = JSON.parse(xmlHttp.responseText);
+					if(responseObj.boardSVG != null) {
+						const board = document.getElementById("board");
+						board.innerHTML = responseObj.boardSVG;
+						setUpPiecesToAttackFrom(responseObj.piecePositions);
+						setUpPositionsToAttackTo(squareToAttackFrom, responseObj.positionsToAttack);
+					}
+				}
+			}
+			xmlHttp.open("POST", "/getAttackFromPosSVG");
+			let formData = new FormData();
+			formData.append("squareToAttackFrom", squareToAttackFrom);
+			xmlHttp.send(formData);
+		}
+	</script>
+        <p style="text-align:center"><button onclick="submitResignation()" id="resignBtn">RESIGN</button></p>
+        <p style="text-align:center;display:none" id="backToMainMenuBtn"><button onclick="location.href='/home'">BACK TO MAIN MENU</button></p>
+	<p style="text-align:center;font-family:Cursive" id="gameInfoMsg"></p>
+        <p style="text-align:center;cursor:pointer" id="board"></p>
+    </body>
+</html>
+

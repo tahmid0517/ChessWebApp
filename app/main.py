@@ -11,11 +11,17 @@ from flask import flash
 import sqlite3
 import logging
 import random
+from pathlib import Path
 
 #internal imports
 import app_constants
 from db_util import DBUtil
+from db_util import GameStatus
+from db_util import GameEndMethod
 from log_wrapper import Logger
+from game_manager import GameManager
+from game_manager import PVPGameManager
+from game_manager import LiveGameStatus
 
 MODULE_NAME = "main"
 
@@ -24,6 +30,8 @@ class SessionKeys:
     USER_ID = 'user_id'
     ACTIVE_GAME_ID = 'active_game_id'
     IS_GAME_HOST = 'is_game_host'
+    IS_PLAYING_WHITE = 'is_playing_white'
+    IS_PLAYERS_TURN = 'is_players_turn'
 
 class URLs:
     HOME_PAGE = '/home'
@@ -37,6 +45,11 @@ class URLs:
     CANCEL_PVP_GAME = '/cancelPVPGame'
     GO_TO_GAME = '/goToGame'
     SUBMIT_PVP_GAME_CREDENTIALS = '/submitPVPGameCredentials' 
+    CHECK_IN_PVP_GAME = '/checkInPVPGame'
+    SUBMIT_PVP_RESIGNATION = '/submitPVPResignation'
+    GET_PVP_BOARD_SVG = '/getPVPBoardSVG'
+    GET_ATTACK_FROM_POS_SVG = '/getAttackFromPosSVG'
+    SUBMIT_MOVE = '/submitMove'
 
 JSON_REQUESTS = {URLs.GET_GAME_STATUS}
 
@@ -58,6 +71,13 @@ def get_logger():
         g.log_wrapper = Logger(MODULE_NAME)
     return g.log_wrapper
 
+def get_pvp_game_manager(external_game_id: str):
+    if 'game_manager_dict' not in g:
+        g.game_manager_dict = dict()
+        if external_game_id not in g.game_manager_dict:
+            g.game_manager_dict[external_game_id] = PVPGameManager(external_game_id)
+    return g.game_manager_dict[external_game_id]
+
 def update_last_request_column_for_user(db_connection, user_id: int):
     db_util = DBUtil(db_connection)
     db_util.update_timestamp_for_user(user_id)
@@ -71,6 +91,9 @@ def create_app():
         db_util = DBUtil(get_db_connection())
         db_util.init_users_table()
         db_util.init_games_table()
+
+    # create directory for storing data for different games if it doesn't already exist
+    Path(app_constants.GAMES_DATA_DIR).mkdir(parents=True, exist_ok=True)
 
     @app.route(URLs.SET_NICKNAME, methods=['POST'])
     def set_nickname():
@@ -126,16 +149,18 @@ def create_app():
         else:
             pass
             #update_last_request_column_for_user(get_db_connection(), session[SessionKeys.USER_ID])
-        if SessionKeys.ACTIVE_GAME_ID in session and request.path != URLs.GET_GAME_STATUS and request.path != URLs.CANCEL_PVP_GAME:
+        if SessionKeys.ACTIVE_GAME_ID in session:
             db_util = DBUtil(get_db_connection())
             game_status = db_util.get_game_status(session[SessionKeys.ACTIVE_GAME_ID])
-            if game_status == DBUtil.GameStatus.CANCELLED or game_status == DBUtil.GameStatus.COMPLETED:
+            if (game_status == GameStatus.CANCELLED or game_status == GameStatus.COMPLETED) and (request.path != URLs.CHECK_IN_PVP_GAME) and (request.path != URLs.GET_PVP_BOARD_SVG):
                 session.pop(SessionKeys.ACTIVE_GAME_ID, None)
                 session.pop(SessionKeys.IS_GAME_HOST, None)
+                session.pop(SessionKeys.IS_PLAYING_WHITE, None)
+                session.pop(SessionKeys.IS_PLAYERS_TURN, None)
                 return
-            if game_status == DBUtil.GameStatus.WAITING_FOR_OPPONENT and request.path != URLs.WAIT_FOR_OPP_PAGE:
+            if request.method == 'GET' and game_status == GameStatus.WAITING_FOR_OPPONENT and request.path != URLs.WAIT_FOR_OPP_PAGE:
                 return redirect(URLs.WAIT_FOR_OPP_PAGE)
-            if game_status == DBUtil.GameStatus.ACTIVE and request.path != URLs.GO_TO_GAME:
+            if request.method == 'GET' and game_status == GameStatus.ACTIVE and request.path != URLs.GO_TO_GAME:
                 return redirect(URLs.GO_TO_GAME)
 
     @app.route('/')
@@ -164,7 +189,8 @@ def create_app():
             host_plays_as = -1 
             try:
                 host_plays_as = int(request.form['hostPlaysAs'])
-                time_limit = int(request.form['timeLimit'])
+                # time_limit = int(request.form['timeLimit'])
+                time_limit = 0 # not supporting time limits for now
             except ValueError:
                 return render_template('createGame.html', gameVsHuman=True, showErrorMessage=True, showPasswordErrorMessage=False)
             if host_plays_as not in {RANDOM, WHITE, BLACK}:
@@ -184,6 +210,7 @@ def create_app():
             external_game_id = db_util.create_pvp_game(host_user_id, host_playing_white, game_password)
             session[SessionKeys.ACTIVE_GAME_ID] = external_game_id
             session[SessionKeys.IS_GAME_HOST] = True            
+            session[SessionKeys.IS_PLAYING_WHITE] = host_plays_as == WHITE
             get_logger().debug("PVP game with external ID: " + external_game_id + " has been created. Returning 'Waiting for opponent' page")
             return redirect(URLs.WAIT_FOR_OPP_PAGE)
         else:
@@ -197,7 +224,7 @@ def create_app():
         db_util = DBUtil(get_db_connection())
         game_pass = db_util.get_pvp_game_pass(session[SessionKeys.ACTIVE_GAME_ID])
         get_logger().debug("Returning waitForOpponent.html")
-        linkForJoining = app_constants.BASE_URL + URLs.JOIN_PVP_GAME + '?' + 'gameID=' + session[SessionKeys.ACTIVE_GAME_ID]
+        linkForJoining = URLs.JOIN_PVP_GAME + '?' + 'gameID=' + session[SessionKeys.ACTIVE_GAME_ID]
         return render_template('waitForOpponent.html', link=linkForJoining, passwordReq=(game_pass!=''), password=game_pass)
 
     @app.route(URLs.GET_GAME_STATUS, methods=['POST'])
@@ -228,13 +255,15 @@ def create_app():
         db_util = DBUtil(get_db_connection())
         active_game_id = session[SessionKeys.ACTIVE_GAME_ID]
         game_status = db_util.get_game_status(active_game_id)
-        if game_status != DBUtil.GameStatus.WAITING_FOR_OPPONENT:
+        if game_status != GameStatus.WAITING_FOR_OPPONENT:
             logger.debug("Game status is not 'Waiting for opponent', so cannot cancel it")
             return jsonify({'FAILURE': "Game is not in a state to be able to cancel it."})
         logger.debug("Cancelling PVP game")
         db_util.cancel_pvp_game(active_game_id)
         session.pop(SessionKeys.ACTIVE_GAME_ID, None)
         session.pop(SessionKeys.IS_GAME_HOST, None)
+        session.pop(SessionKeys.IS_PLAYING_WHITE, None)
+        session.pop(SessionKeys.IS_PLAYERS_TURN, None)
         return jsonify({'SUCCESS': "Game has been cancelled."})         
 
     @app.route(URLs.JOIN_PVP_GAME)
@@ -245,15 +274,16 @@ def create_app():
                 return render_template('joinGame.html', prefilled_id='', showUnsuccessfulMessage=True) 
             db_util = DBUtil(get_db_connection()) 
             game_status = db_util.get_game_status(game_id)
-            if game_status is None or game_status != DBUtil.GameStatus.WAITING_FOR_OPPONENT:
+            if game_status is None or game_status != GameStatus.WAITING_FOR_OPPONENT:
                 return render_template('joinGame.html', prefilled_id='', showUnsuccessfulMessage=True) 
             password = db_util.get_pvp_game_pass(game_id)
             if password is None:
                 return render_template('joinGame.html', prefilled_id='', showUnsuccessfulMessage=True) 
             if password == '':
-                db_util.set_pvp_game_active(game_id)
+                is_playing_white = db_util.set_pvp_game_active(game_id, session[SessionKeys.USER_ID])
                 session[SessionKeys.ACTIVE_GAME_ID] = game_id
                 session[SessionKeys.IS_GAME_HOST] = False
+                session[SessionKeys.IS_PLAYING_WHITE] = is_playing_white
                 return redirect(URLs.HOME_PAGE) 
             else:
                 return render_template('joinGame.html', prefilledID=game_id, showUnsuccessfulMessage=False) 
@@ -274,15 +304,16 @@ def create_app():
             return render_template('joinGame.html', prefilled_id='', showUnsuccessfulMessage=True) 
         db_util = DBUtil(get_db_connection())
         game_status = db_util.get_game_status(submitted_game_id)
-        if game_status is None or game_status != DBUtil.GameStatus.WAITING_FOR_OPPONENT:
+        if game_status is None or game_status != GameStatus.WAITING_FOR_OPPONENT:
             return render_template('joinGame.html', prefilled_id='', showUnsuccessfulMessage=True) 
         actual_pass = db_util.get_pvp_game_pass(submitted_game_id)
         if actual_pass is None or actual_pass != submitted_pass:
             return render_template('joinGame.html', prefilled_id='', showUnsuccessfulMessage=True) 
         else:
-            db_util.set_pvp_game_active(submitted_game_id)
+            is_playing_white = db_util.set_pvp_game_active(submitted_game_id, session[SessionKeys.USER_ID])
             session[SessionKeys.ACTIVE_GAME_ID] = submitted_game_id
             session[SessionKeys.IS_GAME_HOST] = False
+            session[SessionKeys.IS_PLAYING_WHITE] = is_playing_white
             return redirect(URLs.HOME_PAGE) 
 
     @app.route(URLs.GO_TO_GAME)
@@ -290,9 +321,178 @@ def create_app():
         # code here is just temporary
         if SessionKeys.ACTIVE_GAME_ID not in session:
             return redirect(URLs.HOME_PAGE)
-        temp_str = 'Player: ' + session[SessionKeys.NICKNAME] + ', GameID: ' + session[SessionKeys.ACTIVE_GAME_ID] + ', Is host?:' + str(session[SessionKeys.IS_GAME_HOST])
-        return render_template('game.html', tempStr=temp_str) 
+        game_id = session[SessionKeys.ACTIVE_GAME_ID] 
+        is_host = session[SessionKeys.IS_GAME_HOST]
+        db_util = DBUtil(get_db_connection())
+        opponent_nickname = db_util.get_opponent_nickname(game_id, is_host)
+        return render_template('pvpGame.html', opponentNickname=opponent_nickname) 
 
+    def is_players_turn(game_id):
+        if SessionKeys.IS_PLAYERS_TURN not in session or not session[SessionKeys.IS_PLAYERS_TURN]:
+            game_manager = get_pvp_game_manager(game_id)
+            num_of_moves_made = game_manager.get_number_of_moves_made()
+            is_players_turn = False
+            if num_of_moves_made % 2 == 0 and session[SessionKeys.IS_PLAYING_WHITE]:
+                is_players_turn = True
+            elif num_of_moves_made % 2 == 1 and not session[SessionKeys.IS_PLAYING_WHITE]:
+                is_players_turn = True
+            session[SessionKeys.IS_PLAYERS_TURN] = is_players_turn
+        return session[SessionKeys.IS_PLAYERS_TURN]
+
+    @app.route(URLs.CHECK_IN_PVP_GAME, methods=['POST']) 
+    def check_in_pvp_game():
+        logger = get_logger()
+        if SessionKeys.ACTIVE_GAME_ID not in session:
+            logger.debug("check-in request was called with no active game to check into. Returning error JSON")
+            return get_error_json("No active game to check into")
+
+        json_to_return = dict()
+        JSON_OPPONENT_STATUS_PROP = 'opponentStatus'
+        JSON_GAME_STATUS_PROP = 'gameStatus'
+        JSON_REASON_PROP = 'reasonForGameEnding'
+        JSON_PLAYERS_TURN = 'isPlayersTurn'
+
+        game_id = session[SessionKeys.ACTIVE_GAME_ID]
+        game_manager = get_pvp_game_manager(game_id)
+        game_manager.get_number_of_moves_made() # testing this
+        logger.debug("GameManager obj: " + str(game_manager))
+        is_host = session[SessionKeys.IS_GAME_HOST]
+
+        # handle cases where opponent has been offline for some time
+        time_since_opponent_last_check_in = game_manager.get_time_since_last_check_in_from_opponent(is_host)
+        TIME_FOR_AUTO_RESIGN = 180
+        if time_since_opponent_last_check_in >= TIME_FOR_AUTO_RESIGN:
+            # end the game by auto-resignation of opponent
+            game_manager.declare_winner(is_host, from_auto_resign=True)
+            db_util = DBUtil(get_db_connection())
+            db_util.end_game(game_id, GameEndMethod.AUTO_RESIGN, is_host, False, '')
+        TIME_TO_DECLARE_OPPONENT_OFFLINE = 12
+        if time_since_opponent_last_check_in >= TIME_TO_DECLARE_OPPONENT_OFFLINE:
+            json_to_return[JSON_OPPONENT_STATUS_PROP] = 'OFFLINE'
+        else:
+            json_to_return[JSON_OPPONENT_STATUS_PROP] = 'ONLINE'
+
+        # handle isPlayersTurn property
+        json_to_return[JSON_PLAYERS_TURN] = is_players_turn(game_id)
+
+        # get the current game status 
+        game_status = game_manager.get_game_status()
+        if game_status == LiveGameStatus.ACTIVE:
+            json_to_return[JSON_GAME_STATUS_PROP] = 'ACTIVE'
+            game_manager.receive_check_in(is_host)
+            return jsonify(json_to_return)
+        else:
+            if game_status == LiveGameStatus.DRAW_INSUFFICIENT:
+                json_to_return[JSON_GAME_STATUS_PROP] = 'DRAW'
+                json_to_return[JSON_REASON_PROP] = 'INSUFFICENT MATERIAL'
+            elif game_status == LiveGameStatus.DRAW_STALEMENT:
+                json_to_return[JSON_GAME_STATUS_PROP] = 'DRAW'
+                json_to_return[JSON_REASON_PROP] = 'STALEMATE'
+            else:
+                if game_manager.did_player_win(is_host):
+                    json_to_return[JSON_GAME_STATUS_PROP] = 'WON'
+                else:
+                    json_to_return[JSON_GAME_STATUS_PROP] = 'LOST'
+                if game_status == LiveGameStatus.AUTO_RESIGNED:
+                    json_to_return[JSON_REASON_PROP] = 'AUTO-RESIGNATION'
+                elif game_status == LiveGameStatus.RESIGNED:
+                    json_to_return[JSON_REASON_PROP] = 'RESIGNATION'
+                elif game_status == LiveGameStatus.CHECKMATED:
+                    json_to_return[JSON_REASON_PROP] = 'CHECKMATE'
+            return jsonify(json_to_return)
+
+    @app.route(URLs.GET_PVP_BOARD_SVG, methods=['POST'])
+    def get_pvp_board_svg():
+        logger = get_logger()
+        if SessionKeys.ACTIVE_GAME_ID not in session:
+            logger.debug("No active game to get get the board SVG for")
+            return get_error_json("No active game to get board for ")
+        json_to_return = dict()
+        game_id = session[SessionKeys.ACTIVE_GAME_ID]
+        is_playing_white = session[SessionKeys.IS_PLAYING_WHITE]
+        game_manager = get_pvp_game_manager(game_id)
+        board_svg = game_manager.get_current_board_svg(is_playing_white)
+        json_to_return['boardSVG'] = board_svg
+        if is_players_turn(game_id):
+            json_to_return['isPlayersTurn'] = True
+            json_to_return['piecePositions'] = game_manager.get_piece_positions(is_playing_white)
+        else:
+            json_to_return['isPlayersTurn'] = False
+        return jsonify(json_to_return)
+
+    @app.route(URLs.GET_ATTACK_FROM_POS_SVG, methods=['POST'])
+    def get_attack_from_pos_svg():
+        logger = get_logger()
+        if SessionKeys.ACTIVE_GAME_ID not in session:
+            logger.debug("No active game to get get the board SVG for")
+            return get_error_json("No active game to get board for ")
+        game_id = session[SessionKeys.ACTIVE_GAME_ID]
+        is_playing_white = session[SessionKeys.IS_PLAYING_WHITE]
+        game_manager = get_pvp_game_manager(game_id)
+        attack_from_square = request.form['squareToAttackFrom']
+        try:
+            board_svg, positions_to_attack_from, positions_to_attack = game_manager.get_attack_from_pos_svg(is_playing_white, attack_from_square)
+            json_to_return = dict()
+            json_to_return['boardSVG'] = board_svg
+            json_to_return['piecePositions'] = positions_to_attack_from 
+            json_to_return['positionsToAttack'] = positions_to_attack
+            return jsonify(json_to_return)  
+        except:
+            return get_error_json("Can not attack from that square.")
+
+    @app.route(URLs.SUBMIT_MOVE, methods=['POST'])
+    def submit_move():
+        logger = get_logger()
+        logger.debug("RECEIVED REQUEST")
+        if SessionKeys.ACTIVE_GAME_ID not in session:
+            logger.debug("No active game to submit move for")
+            return get_error_json("No active game to submit move for")
+        game_id = session[SessionKeys.ACTIVE_GAME_ID]
+        is_playing_white = session[SessionKeys.IS_PLAYING_WHITE]
+        game_manager = get_pvp_game_manager(game_id)
+        from_square = str(request.form['fromSquare'])
+        to_square = str(request.form['toSquare'])
+        promotion = None 
+        if 'promotion' in request.form:
+            promotion = request.form['promotion']
+            KNIGHT = 2
+            QUEEN = 5
+            if not isinstance(promotion, int) or promotion < KNIGHT or promotion > QUEEN:
+                promotion = None
+        try:
+            game_manager.make_move(is_playing_white, from_square, to_square, promotion)
+            session[SessionKeys.IS_PLAYERS_TURN] = False
+            # handle case where the game has ended
+            board = game_manager.get_board()
+            if board.is_game_over():
+                db_util = DBUtil(get_db_connection())
+                if board.is_checkmate():
+                    is_host = session[SessionKeys.IS_GAME_HOST]
+                    game_manager.declare_winner(is_host, from_checkmate=True)
+                    db_util.end_game(game_id, GameEndMethod.CHECKMATE, is_host, False, '')
+                elif board.is_insufficient_material():
+                    game_manager.declare_draw(from_insufficient_material=True)
+                    db_util.end_game(game_id, GameEndMethod.DRAW_INSUFFICIENT, False, True, '')
+                elif board.is_stalemate():
+                    game_manager.declare_draw(from_stalemate=True)
+                    db_util.end_game(game_id, GameEndMethod.DRAW_STALEMATE, False, True, '')
+            return jsonify({'isMoveLegal': True}) 
+        except:
+            return jsonify({'isMoveLegal': False}) 
+
+    @app.route(URLs.SUBMIT_PVP_RESIGNATION, methods=['POST'])
+    def submit_pvp_resignation():
+        logger = get_logger()
+        if SessionKeys.ACTIVE_GAME_ID not in session:
+            logger.debug("Auto resign victory submitted, but there is no active game. Returning error JSON")
+            return get_error_json("No active game to submit autoresign victory for")
+        game_id = session[SessionKeys.ACTIVE_GAME_ID]
+        is_host = session[SessionKeys.IS_GAME_HOST]
+        game_manager = get_pvp_game_manager(game_id)
+        game_manager.declare_winner(not is_host, from_resign=True)
+        db_util = DBUtil(get_db_connection())
+        db_util.end_game(game_id, GameEndMethod.RESIGN, not is_host, False, '')
+        return ('', 204)
 
     @app.teardown_appcontext
     def close_db_connection(exception):

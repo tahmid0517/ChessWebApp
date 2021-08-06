@@ -114,9 +114,9 @@ def create_app():
             return redirect_to_nickname_page(redirect_url, True, False, False)
 
         # make user reenter nickname if it contains profanity
-        lowercase_nickname = nickname.casefold()
+        lowercase_nickname_split = nickname.casefold().split()
         for bad_word in app_constants.BAD_WORDS:
-            if bad_word in lowercase_nickname:
+            if bad_word in lowercase_nickname_split:
                 logger.debug("User needs to reenter nickname since they used profanity")
                 return redirect_to_nickname_page(redirect_url, False, True, False)
 
